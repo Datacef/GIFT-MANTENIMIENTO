@@ -1,0 +1,54 @@
+LICENCIA DE SOFTWARE PROPIETARIO
+Sistema de Gestión de Mantenimiento (GIFT-MANTENIMIENTO)
+
+Copyright (c) 2026 DATACEF — Especialistas en Tecnología Informática
+Todos los derechos reservados.
+
+1. PROPIEDAD INTELECTUAL
+
+Este software, incluyendo su código fuente, código objeto, documentación,
+diseños, estructura de datos e interfaces, constituye una obra protegida
+por la legislación de propiedad intelectual vigente en Chile y por los
+tratados internacionales aplicables. Queda expresamente prohibida su
+reproducción, distribución, modificación, venta, arriendo, ingeniería
+inversa o cualquier otra forma de explotación, total o parcial, sin
+autorización previa, expresa y por escrito de DATACEF.
+
+2. ENTREGA "TAL CUAL" — SIN GARANTÍAS
+
+EL SOFTWARE SE PROPORCIONA "TAL CUAL" Y "SEGÚN DISPONIBLE", SIN GARANTÍA
+DE NINGÚN TIPO, EXPRESA O IMPLÍCITA, INCLUYENDO PERO NO LIMITADO A LAS
+GARANTÍAS DE COMERCIABILIDAD, DE ADECUACIÓN PARA UN PROPÓSITO PARTICULAR
+Y DE NO INFRACCIÓN. DATACEF no garantiza que el software esté libre de
+errores, que su funcionamiento sea ininterrumpido ni que satisfaga los
+requisitos de una finalidad particular del usuario.
+
+3. EXENCIÓN DE RESPONSABILIDAD POR DAÑOS Y PERJUICIOS
+
+EN NINGÚN CASO DATACEF, SUS SOCIOS, EMPLEADOS, REPRESENTANTES NI
+COLABORADORES SERÁN RESPONSABLES ANTE NINGUNA PERSONA POR NINGÚN DAÑO
+DIRECTO, INDIRECTO, INCIDENTAL, ESPECIAL O CONSECUENTE, NI POR PÉRDIDA
+DE DATOS, DE INGRESOS, DE BENEFICIOS O DE INFORMACIÓN, NI POR CUALQUIER
+OTRO DAÑO Y PERJUICIO, DE CUALQUIER NATURALEZA Y CON CUALQUIER CAUSA
+DE DEMANDA (CONTRACTUAL, EXTRACONTRACTUAL U OTRA), QUE SE DERIVE DEL
+USO, DE LA IMPOSIBILIDAD DE USO O DEL FUNCIONAMIENTO DE ESTE SOFTWARE,
+AUN CUANDO SE HAYA ADVERTIDO DE LA POSIBILIDAD DE TALES DAÑOS.
+
+4. COMPONENTES DE TERCEROS
+
+Este software incorpora componentes de código abierto (entre otros,
+la plantilla Horizon UI de Simmmple, Next.js, React, Parse Server,
+Express, MongoDB y Node.js, junto con sus dependencias), los que se
+rigen exclusivamente por sus respectivas licencias originales. La
+presente licencia aplica únicamente al código propio desarrollado por
+DATACEF y no afecta los derechos otorgados por las licencias de dichos
+componentes de terceros.
+
+5. ACEPTACIÓN
+
+El uso de este software, en cualquiera de sus formas o versiones,
+implica la aceptación íntegra e irrevocable de los términos de la
+presente licencia. Si no acepta estos términos, debe abstenerse de
+utilizar el software y eliminarlo de sus sistemas.
+
+Para solicitar autorizaciones de uso, contacte a DATACEF — Chile.

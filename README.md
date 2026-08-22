@@ -47,15 +47,120 @@ Permite <em>planificar, ejecutar y trazar</em> el mantenimiento preventivo y cor
 
 ---
 
-<h2>🐳 Despliegue Local</h2>
+<h2>🔐 Advertencia: Actualice las Credenciales antes de Usar el Sistema</h2>
+
+<table>
+<tr>
+<td>
+
+⚠️ <strong>ADVERTENCIA CRÍTICA — NO LEVANTE EL SISTEMA SIN ACTUALIZAR LAS CREDENCIALES</strong>
+
+El uso de las credenciales de ejemplo, o de credenciales filtradas, expone el sistema a <strong>ataques directos e inmediatos</strong>. Por ello el backend incorpora una validación de arranque (<code>backend/validate-env.js</code>) que <strong>bloquea el inicio del servidor</strong> si detecta credenciales ausentes, sin actualizar (valores <code>CAMBIAR_ESTO_*</code>) o débiles: no hay forma de levantar el sistema sin pasar por esa verificación.
+
+</td>
+</tr>
+</table>
+
+<h3>🚨 Peligros de NO actualizar las credenciales</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th align="left">Credencial expuesta</th>
+      <th align="left">Qué puede hacer un atacante</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🔑 <code>PARSE_MASTER_KEY</code></td>
+      <td><strong>Control total del backend sin iniciar sesión</strong>: leer, alterar o borrar toda la base de datos (equipos, pautas, historiales, usuarios), crear cuentas con nivel SUPER_ADMIN y saltarse todos los niveles de acceso del sistema.</td>
+    </tr>
+    <tr>
+      <td>🗄️ <code>MONGO_ROOT_USER</code> + <code>MONGO_ROOT_PASSWORD</code></td>
+      <td><strong>Acceso directo a la base de datos</strong>, incluido el panel Mongo Express (que usa estas mismas credenciales): robo de información de mantenimiento del establecimiento de salud, cifrado por rescate (ransomware) o borrado destructivo de todos los datos.</td>
+    </tr>
+    <tr>
+      <td>👑 <code>DEFAULT_ADMIN_PASS</code></td>
+      <td><strong>Suplantación del super administrador</strong> (nivel 5): administración completa del sistema, gestión de usuarios y roles, y eliminación de registros sin dejar rastro de responsabilidad.</td>
+    </tr>
+    <tr>
+      <td>📧 <code>BREVO_SMTP_PASS</code></td>
+      <td><strong>Uso fraudulento de su cuenta de correo</strong>: envío de spam y phishing en su nombre, suspensión de la cuenta Brevo, agotamiento de su cuota e inclusión de su dominio en listas negras.</td>
+    </tr>
+  </tbody>
+</table>
 
 <blockquote>
-El proyecto se ejecuta <strong>100% en entorno local</strong> mediante <strong>Docker Compose</strong>. No requiere servicios cloud externos.
+🧷 <strong>Importante:</strong> eliminar un archivo <code>.env</code> del repositorio <em>no</em> borra las credenciales del historial de git: una vez filtradas, la única mitigación efectiva es <strong>rotarlas</strong> (generar nuevas y revocar las antiguas en cada servicio). El sistema maneja datos de establecimientos de salud, considerados <strong>datos sensibles</strong> conforme a la legislación chilena de protección de datos.
+</blockquote>
+
+<h3>⚙️ Cómo configurar sus credenciales</h3>
+
+**Paso 1** — Copie las plantillas de variables de entorno:
+
+```bash
+cp .env.example .env            # backend, Docker Compose y Mongo
+cp .env.local.example .env.local  # entorno local del frontend
+```
+
+**Paso 2** — Reemplace **todos** los valores `CAMBIAR_ESTO_*` por credenciales propias y únicas:
+
+```bash
+# Generar claves fuertes (ejemplo):
+openssl rand -hex 32
+```
+
+| Variable | Requisito mínimo |
+|---|---|
+| `PARSE_MASTER_KEY` / `PARSE_JS_KEY` | ≥ 20 caracteres, aleatorias |
+| `MONGO_ROOT_PASSWORD` | ≥ 12 caracteres |
+| `DEFAULT_ADMIN_PASS` | ≥ 10 caracteres, no trivial |
+| `BREVO_SMTP_PASS` | Su clave SMTP real de Brevo |
+
+Los archivos `.env` y `.env.local` están excluidos de git (ver `.gitignore`): **nunca deben subirse al repositorio**. Si el backend bloquea el arranque, revise el error en los logs del servicio (opción 9 del Coordinador): indicará exactamente qué credencial debe corregir.
+
+---
+
+<h2>🐳 Despliegue Local — Coordinador</h2>
+
+<blockquote>
+<strong>Todo el sistema se levanta y administra mediante el Coordinador</strong> (<code>scripts/coordinador.py</code>), el centro de control de los contenedores Docker del proyecto: MongoDB, backend (Parse Server), frontend (Next.js), Mongo Express y Nginx. Requiere <strong>Python 3</strong> y <strong>Docker Desktop en ejecución</strong>; el script verifica ambos prerrequisitos al iniciar. El proyecto se ejecuta <strong>100% en entorno local</strong> y no requiere servicios cloud externos.
 </blockquote>
 
 ```bash
-docker compose up --build
+python scripts/coordinador.py     # menú interactivo
+python scripts/coordinador.py 1   # uso directo: opción 1 = rebuild completo
 ```
+
+Para un despliegue desde cero, use la <strong>opción 1 (rebuild completo)</strong>: hace <code>down</code>, construye sin caché y levanta todos los servicios. En el primer arranque, el backend valida las credenciales y <strong>se negará a iniciar si no fueron actualizadas</strong> (ver advertencia anterior).
+
+<h3>🎛️ Opciones del Coordinador</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th align="center">Opción</th>
+      <th align="left">Acción</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td align="center"><strong>1</strong></td><td>🔄 <strong>Rebuild completo</strong> (down → build sin caché → up) — despliegue inicial o cambios mayores</td></tr>
+    <tr><td align="center"><strong>2</strong></td><td>⬆️ Actualizar sin rebuild (down → up)</td></tr>
+    <tr><td align="center"><strong>3</strong></td><td>🔁 Reiniciar todos los servicios</td></tr>
+    <tr><td align="center"><strong>r</strong></td><td>🚑 <strong>Rescate rápido</strong> — levanta los servicios uno a uno en orden de dependencia (MongoDB → backend → frontend → Mongo Express → Nginx)</td></tr>
+    <tr><td align="center"><strong>4</strong></td><td>⚙️ Rebuild solo <strong>backend</strong> (Parse Server)</td></tr>
+    <tr><td align="center"><strong>5</strong></td><td>🎨 Rebuild solo <strong>frontend</strong> (Next.js)</td></tr>
+    <tr><td align="center"><strong>6</strong></td><td>🌐 Reiniciar Nginx (aplica cambios de <code>default.conf</code>)</td></tr>
+    <tr><td align="center"><strong>7</strong></td><td>🗄️ Reiniciar Mongo Express</td></tr>
+    <tr><td align="center"><strong>8</strong></td><td>📊 Estado de servicios (contenedores + consumo de recursos)</td></tr>
+    <tr><td align="center"><strong>9</strong></td><td>📜 Logs en tiempo real (por servicio o todos)</td></tr>
+    <tr><td align="center"><strong>10</strong></td><td>⏹️ Parar todos los servicios (los volúmenes se preservan)</td></tr>
+    <tr><td align="center"><strong>11</strong></td><td>▶️ Levantar todos los servicios</td></tr>
+    <tr><td align="center"><strong>12</strong></td><td>💥 <strong>Reset total</strong> — <strong>borra el volumen de MongoDB y toda la data</strong> (pide confirmación escrita)</td></tr>
+    <tr><td align="center"><strong>13</strong></td><td>🧹 Limpieza de Docker (prune de imágenes, contenedores, volúmenes y caché)</td></tr>
+    <tr><td align="center"><strong>14</strong></td><td>🏥 Cargar establecimientos desde Excel (<code>scripts/load_data_ss.py</code>)</td></tr>
+  </tbody>
+</table>
 
 Todos los servicios quedan expuestos a través de un <strong>reverse proxy Nginx</strong> en el puerto <code>5771</code>.
 
@@ -399,6 +504,19 @@ Todo el sistema —<em>interfaz, datos y documentación funcional</em>— está 
 
 ---
 
+<h2>🙏 Agradecimientos</h2>
+
+<p align="center">
+La interfaz de usuario está construida sobre la plantilla de código abierto <strong>Horizon UI</strong>,<br/>
+desarrollada por <strong>Simmmple</strong> y distribuida bajo licencia <a href="https://opensource.org/licenses/MIT">MIT</a>.
+</p>
+
+<p align="center">
+🌐 <a href="https://horizon-ui.com/"><strong>horizon-ui.com</strong></a>
+</p>
+
+---
+
 <div align="center">
 
 <h2>💼 Autoría</h2>
@@ -414,6 +532,6 @@ a los estándares nacionales de acreditación.</em>
 
 <br/><br/>
 
-<sub>© DATACEF — Todos los derechos reservados</sub>
+<sub>© DATACEF — Todos los derechos reservados. Ver [LICENSE](./LICENSE).</sub>
 
 </div>

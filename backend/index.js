@@ -3,6 +3,7 @@ const { ParseServer } = require('parse-server');
 const path = require('path');
 const parseServerConfig = require('./parse-config');
 const { initSuperAdmin } = require('./init-super-admin');
+const { validateEnvOrExit } = require('./validate-env');
 
 const app = express();
 
@@ -156,6 +157,9 @@ const host = process.env.HOST || '0.0.0.0';
 // Función principal para inicializar el servidor
 async function main() {
   try {
+    // Bloquear el arranque si las credenciales están ausentes, sin actualizar o son débiles
+    validateEnvOrExit();
+
     await startServer();
     
     const httpServer = app.listen(port, host, function() {

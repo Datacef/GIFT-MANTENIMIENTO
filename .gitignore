@@ -3,8 +3,9 @@
 .claude-flow/
 
 # Environment
-#.env
-#.env.local
+.env
+.env.local
+.env.*.local
 .swarm/
  
 # Dependencies
