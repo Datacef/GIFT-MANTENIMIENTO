@@ -1,0 +1,494 @@
+/**
+ * Parse Cloud Functions
+ * 
+ * Este archivo define las Cloud Functions disponibles en tu Parse Server.
+ */
+
+// Función simple de prueba
+Parse.Cloud.define('hello', async (request) => {
+  return 'Hola ' + (request.params.name || 'mundo') + ' desde Parse Cloud!';
+});
+
+// Ejemplo de función que usa las clases de la base de datos
+Parse.Cloud.define('countObjects', async (request) => {
+  const { className } = request.params;
+  
+  if (!className) {
+    throw new Parse.Error(400, 'Se requiere el parámetro className');
+  }
+  
+  try {
+    const ParseObject = Parse.Object.extend(className);
+    const query = new Parse.Query(ParseObject);
+    const count = await query.count();
+    
+    return {
+      className,
+      count,
+      status: 'success'
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al contar objetos: ${error.message}`);
+  }
+});
+
+// Ejemplo de función con validación y lógica de negocio
+Parse.Cloud.define('procesarDatos', async (request) => {
+  const { datos, operacion } = request.params;
+  
+  if (!datos || !Array.isArray(datos)) {
+    throw new Parse.Error(400, 'El parámetro datos debe ser un array');
+  }
+  
+  if (!operacion) {
+    throw new Parse.Error(400, 'Se requiere el parámetro operacion');
+  }
+  
+  let resultado;
+  
+  switch (operacion) {
+    case 'suma':
+      resultado = datos.reduce((total, valor) => total + valor, 0);
+      break;
+    case 'promedio':
+      if (datos.length === 0) {
+        resultado = 0;
+      } else {
+        const suma = datos.reduce((total, valor) => total + valor, 0);
+        resultado = suma / datos.length;
+      }
+      break;
+    case 'maximo':
+      resultado = Math.max(...datos);
+      break;
+    case 'minimo':
+      resultado = Math.min(...datos);
+      break;
+    default:
+      throw new Parse.Error(400, `Operación no soportada: ${operacion}`);
+  }
+  
+  return {
+    datos,
+    operacion,
+    resultado,
+    timestamp: new Date()
+  };
+});
+
+// ===============================================
+// FUNCIONES DE ADMINISTRACIÓN DE USUARIOS
+// ===============================================
+
+/**
+ * Obtiene todos los usuarios del sistema con paginación
+ * Requiere permisos de administrador (accessLevel >= 4) O acceso temporal para configuración inicial
+ */
+Parse.Cloud.define('getAllUsers', async (request) => {
+  // Verificar permisos del usuario actual
+  const currentUser = request.user;
+  if (!currentUser) {
+    throw new Parse.Error(403, 'Se requiere autenticación');
+  }
+  
+  // Verificar que sea administrador o superadmin (nivel 4 o 5)
+  // TEMPORAL: Permitir acceso a cualquier usuario autenticado para configuración inicial
+  const accessLevel = currentUser.get('accessLevel');
+  const isTemporaryAccess = !accessLevel; // Si no tiene accessLevel definido, permitir acceso temporal
+  
+  if (!isTemporaryAccess && (accessLevel < 4)) {
+    throw new Parse.Error(403, 'Se requieren permisos de administrador');
+  }
+  
+  if (isTemporaryAccess) {
+    console.log('⚠️ Acceso temporal concedido para configuración inicial del sistema');
+  }
+  
+  const { limit = 100, page = 0 } = request.params;
+  
+  try {
+    // Consultar el total de usuarios
+    const total = await new Parse.Query(Parse.User).count({ useMasterKey: true });
+    
+    // Consultar usuarios con paginación
+    const query = new Parse.Query(Parse.User);
+    query.limit(limit);
+    query.skip(page * limit);
+    query.descending('createdAt');
+    
+    const users = await query.find({ useMasterKey: true });
+    
+    // Transformar los usuarios al formato esperado
+    return {
+      results: users.map(user => ({
+        id: user.id,
+        email: user.get('email'),
+        firstName: user.get('firstName'),
+        lastName: user.get('lastName'),
+        birthDate: user.get('birthDate'),
+        gender: user.get('gender'),
+        phone: user.get('phone'),
+        accessLevel: user.get('accessLevel') || 1, // Por defecto nivel 1 (USER)
+        avatarUrl: user.get('avatarUrl'),
+        servicioSalud: user.get('servicioSalud'),
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      })),
+      total: total
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al obtener usuarios: ${error.message}`);
+  }
+});
+
+/**
+ * Busca usuarios por email, nombre o apellido
+ * Requiere permisos de administrador (accessLevel >= 4)
+ */
+Parse.Cloud.define('searchUsers', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) {
+    throw new Parse.Error(403, 'Se requiere autenticación');
+  }
+  
+  const accessLevel = currentUser.get('accessLevel');
+  if (!accessLevel || accessLevel < 4) {
+    throw new Parse.Error(403, 'Se requieren permisos de administrador');
+  }
+  
+  const { criteria } = request.params;
+  if (!criteria || criteria.trim().length < 2) {
+    throw new Parse.Error(400, 'El criterio de búsqueda debe tener al menos 2 caracteres');
+  }
+  
+  try {
+    // Crear consultas para diferentes campos
+    const emailQuery = new Parse.Query(Parse.User);
+    emailQuery.contains('email', criteria);
+    
+    const firstNameQuery = new Parse.Query(Parse.User);
+    firstNameQuery.contains('firstName', criteria);
+    
+    const lastNameQuery = new Parse.Query(Parse.User);
+    lastNameQuery.contains('lastName', criteria);
+    
+    // Combinar consultas con OR
+    const mainQuery = Parse.Query.or(emailQuery, firstNameQuery, lastNameQuery);
+    mainQuery.limit(50);
+    
+    const users = await mainQuery.find({ useMasterKey: true });
+    
+    return users.map(user => ({
+      id: user.id,
+      email: user.get('email'),
+      firstName: user.get('firstName'),
+      lastName: user.get('lastName'),
+      birthDate: user.get('birthDate'),
+      gender: user.get('gender'),
+      phone: user.get('phone'),
+      accessLevel: user.get('accessLevel') || 1,
+      avatarUrl: user.get('avatarUrl'),
+      servicioSalud: user.get('servicioSalud'),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    }));
+  } catch (error) {
+    throw new Parse.Error(500, `Error al buscar usuarios: ${error.message}`);
+  }
+});
+
+/**
+ * Obtiene un usuario específico por ID
+ * Requiere permisos de administrador (accessLevel >= 4)
+ */
+Parse.Cloud.define('getUserById', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) {
+    throw new Parse.Error(403, 'Se requiere autenticación');
+  }
+  
+  const accessLevel = currentUser.get('accessLevel');
+  if (!accessLevel || accessLevel < 4) {
+    throw new Parse.Error(403, 'Se requieren permisos de administrador');
+  }
+  
+  const { userId } = request.params;
+  if (!userId) {
+    throw new Parse.Error(400, 'Se requiere el ID del usuario');
+  }
+  
+  try {
+    const query = new Parse.Query(Parse.User);
+    const user = await query.get(userId, { useMasterKey: true });
+    
+    return {
+      id: user.id,
+      email: user.get('email'),
+      firstName: user.get('firstName'),
+      lastName: user.get('lastName'),
+      birthDate: user.get('birthDate'),
+      gender: user.get('gender'),
+      phone: user.get('phone'),
+      accessLevel: user.get('accessLevel') || 1,
+      avatarUrl: user.get('avatarUrl'),
+      servicioSalud: user.get('servicioSalud'),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al obtener usuario: ${error.message}`);
+  }
+});
+
+/**
+ * Actualiza los datos de un usuario
+ * Requiere permisos de administrador (accessLevel >= 4)
+ */
+Parse.Cloud.define('updateUser', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) {
+    throw new Parse.Error(403, 'Se requiere autenticación');
+  }
+  
+  const accessLevel = currentUser.get('accessLevel');
+  if (!accessLevel || accessLevel < 4) {
+    throw new Parse.Error(403, 'Se requieren permisos de administrador');
+  }
+  
+  const { userId, userData } = request.params;
+  if (!userId) {
+    throw new Parse.Error(400, 'Se requiere el ID del usuario');
+  }
+  
+  if (!userData) {
+    throw new Parse.Error(400, 'Se requieren los datos del usuario');
+  }
+  
+  try {
+    const query = new Parse.Query(Parse.User);
+    const user = await query.get(userId, { useMasterKey: true });
+    
+    // Actualizar solo los campos proporcionados
+    if (userData.firstName !== undefined) user.set('firstName', userData.firstName);
+    if (userData.lastName !== undefined) user.set('lastName', userData.lastName);
+    if (userData.email !== undefined) user.set('email', userData.email);
+    if (userData.gender !== undefined) user.set('gender', userData.gender);
+    if (userData.phone !== undefined) user.set('phone', userData.phone);
+    if (userData.birthDate !== undefined) user.set('birthDate', userData.birthDate);
+    if (userData.avatarUrl !== undefined) user.set('avatarUrl', userData.avatarUrl);
+    if (userData.servicioSalud !== undefined) user.set('servicioSalud', userData.servicioSalud);
+    
+    // Guardar cambios
+    await user.save(null, { useMasterKey: true });
+    
+    return {
+      id: user.id,
+      email: user.get('email'),
+      firstName: user.get('firstName'),
+      lastName: user.get('lastName'),
+      birthDate: user.get('birthDate'),
+      gender: user.get('gender'),
+      phone: user.get('phone'),
+      accessLevel: user.get('accessLevel') || 1,
+      avatarUrl: user.get('avatarUrl'),
+      servicioSalud: user.get('servicioSalud'),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al actualizar usuario: ${error.message}`);
+  }
+});
+
+/**
+ * Actualiza el nivel de acceso de un usuario
+ * Requiere permisos de super administrador (accessLevel = 5) O acceso temporal para configuración inicial
+ */
+Parse.Cloud.define('updateUserAccessLevel', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) {
+    throw new Parse.Error(403, 'Se requiere autenticación');
+  }
+  
+  const currentAccessLevel = currentUser.get('accessLevel');
+  const isTemporaryAccess = !currentAccessLevel; // Si no tiene accessLevel definido, permitir acceso temporal
+  
+  if (!isTemporaryAccess && currentAccessLevel !== 5) {
+    throw new Parse.Error(403, 'Se requieren permisos de super administrador');
+  }
+  
+  if (isTemporaryAccess) {
+    console.log('⚠️ Acceso temporal concedido para configuración inicial del sistema - updateUserAccessLevel');
+  }
+  
+  const { userId, accessLevel } = request.params;
+  if (!userId) {
+    throw new Parse.Error(400, 'Se requiere el ID del usuario');
+  }
+  
+  if (accessLevel === undefined || accessLevel === null) {
+    throw new Parse.Error(400, 'Se requiere el nivel de acceso');
+  }
+  
+  // Validar que el nivel de acceso sea válido (1-5)
+  if (accessLevel < 1 || accessLevel > 5) {
+    throw new Parse.Error(400, 'El nivel de acceso debe estar entre 1 y 5');
+  }
+  
+  try {
+    const query = new Parse.Query(Parse.User);
+    const user = await query.get(userId, { useMasterKey: true });
+    
+    // No permitir que se modifique su propio nivel de acceso (excepto en configuración inicial)
+    if (!isTemporaryAccess && user.id === currentUser.id) {
+      throw new Parse.Error(403, 'No puedes modificar tu propio nivel de acceso');
+    }
+    
+    user.set('accessLevel', accessLevel);
+    await user.save(null, { useMasterKey: true });
+    
+    return {
+      success: true,
+      message: 'Nivel de acceso actualizado correctamente',
+      userId: user.id,
+      newAccessLevel: accessLevel
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al actualizar nivel de acceso: ${error.message}`);
+  }
+});
+
+/**
+ * Elimina un usuario del sistema
+ * Requiere permisos de super administrador (accessLevel = 5)
+ */
+Parse.Cloud.define('deleteUser', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) {
+    throw new Parse.Error(403, 'Se requiere autenticación');
+  }
+  
+  const currentAccessLevel = currentUser.get('accessLevel');
+  if (!currentAccessLevel || currentAccessLevel !== 5) {
+    throw new Parse.Error(403, 'Se requieren permisos de super administrador');
+  }
+  
+  const { userId } = request.params;
+  if (!userId) {
+    throw new Parse.Error(400, 'Se requiere el ID del usuario');
+  }
+  
+  try {
+    const query = new Parse.Query(Parse.User);
+    const user = await query.get(userId, { useMasterKey: true });
+    
+    // No permitir que se elimine a sí mismo
+    if (user.id === currentUser.id) {
+      throw new Parse.Error(403, 'No puedes eliminarte a ti mismo');
+    }
+    
+    await user.destroy({ useMasterKey: true });
+    
+    return {
+      success: true,
+      message: 'Usuario eliminado correctamente',
+      deletedUserId: userId
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al eliminar usuario: ${error.message}`);
+  }
+});
+
+// ===============================================
+// FUNCIÓN PARA ASIGNAR SUPER ADMIN INICIAL
+// ===============================================
+
+/**
+ * Función para asignar nivel de super admin a un usuario específico
+ * Esta función debe ser llamada solo una vez para configurar el primer super admin
+ */
+Parse.Cloud.define('setSuperAdmin', async (request) => {
+  const { email, masterKey } = request.params;
+  
+  // Verificar que se proporcione la master key para esta operación crítica
+  if (masterKey !== 'hfYyn5FxkYDlOgJ2eJw2HZDW3Zm5TwS0m83ICqmIl25UrHhU') {
+    throw new Parse.Error(403, 'Master key inválida');
+  }
+  
+  if (!email) {
+    throw new Parse.Error(400, 'Se requiere el email del usuario');
+  }
+  
+  try {
+    const query = new Parse.Query(Parse.User);
+    query.equalTo('email', email);
+    const user = await query.first({ useMasterKey: true });
+    
+    if (!user) {
+      throw new Parse.Error(404, 'Usuario no encontrado');
+    }
+    
+    user.set('accessLevel', 5); // Super Admin
+    await user.save(null, { useMasterKey: true });
+    
+    return {
+      success: true,
+      message: `Usuario ${email} configurado como Super Administrador`,
+      userId: user.id,
+      accessLevel: 5
+    };
+  } catch (error) {
+    throw new Parse.Error(500, `Error al configurar super admin: ${error.message}`);
+  }
+});
+
+/**
+ * Función de emergencia para actualizar nivel de acceso usando master key
+ * SOLO para configuración inicial cuando la autenticación normal falla
+ * Requiere master key en los headers de la petición
+ */
+Parse.Cloud.define('emergencyUpdateUserAccessLevel', async (request) => {
+  const { userId, accessLevel, emergencyKey } = request.params;
+  
+  // Verificar clave de emergencia (debe coincidir con la master key)
+  const expectedKey = process.env.PARSE_SERVER_MASTER_KEY;
+  if (!emergencyKey || emergencyKey !== expectedKey) {
+    throw new Parse.Error(403, 'Clave de emergencia inválida');
+  }
+  
+  if (!userId) {
+    throw new Parse.Error(400, 'Se requiere el ID del usuario');
+  }
+  
+  if (accessLevel === undefined || accessLevel === null) {
+    throw new Parse.Error(400, 'Se requiere el nivel de acceso');
+  }
+  
+  // Validar que el nivel de acceso sea válido (1-5)
+  if (accessLevel < 1 || accessLevel > 5) {
+    throw new Parse.Error(400, 'El nivel de acceso debe estar entre 1 y 5');
+  }
+  
+  try {
+    const query = new Parse.Query(Parse.User);
+    const user = await query.get(userId, { useMasterKey: true });
+    
+    user.set('accessLevel', accessLevel);
+    await user.save(null, { useMasterKey: true });
+    
+    console.log(`🚨 FUNCIÓN DE EMERGENCIA: Usuario ${user.get('email')} actualizado a nivel ${accessLevel}`);
+    
+    return {
+      success: true,
+      message: 'Nivel de acceso actualizado correctamente (modo emergencia)',
+      userId: user.id,
+      newAccessLevel: accessLevel,
+      mode: 'emergency'
+    };
+  } catch (error) {
+    console.error('Error en función de emergencia:', error);
+    throw new Parse.Error(500, `Error al actualizar usuario: ${error.message}`);
+  }
+});
+
+console.log('✅ Cloud code cargado correctamente con funciones de administración de usuarios');

@@ -1,0 +1,105 @@
+services:
+  # ─── MongoDB ───────────────────────────────────────────────
+  mongodb:
+    image: mongo:latest
+    container_name: mmtto-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB}
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      mmtto-net:
+        aliases:
+          - mongo
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ─── Parse Server (backend) ────────────────────────────────
+  backend-server:
+    build:
+      context: ./backend
+    container_name: mmtto-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - mmtto-net
+    expose:
+      - "1337"
+
+  # ─── Next.js Frontend ──────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_PARSE_APP_ID: ${NEXT_PUBLIC_PARSE_APP_ID}
+        NEXT_PUBLIC_PARSE_JS_KEY: ${NEXT_PUBLIC_PARSE_JS_KEY}
+        NEXT_PUBLIC_PARSE_SERVER_URL: ${NEXT_PUBLIC_PARSE_SERVER_URL}
+    env_file:
+      - .env
+    container_name: mmtto-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend-server
+    networks:
+      - mmtto-net
+    expose:
+      - "3000"
+
+  # ─── Mongo Express (admin UI para MongoDB) ─────────────────
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: mmtto-mongo-express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/?authSource=admin
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: "27017"
+      # Credenciales para acceder al panel web (reusa las de MongoDB)
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_ROOT_USER}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      # Base URL para funcionar detrás del proxy nginx en /mongo-admin/
+      ME_CONFIG_SITE_BASEURL: /mongo-admin/
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - mmtto-net
+    expose:
+      - "8081"
+
+  # ─── Nginx (reverse proxy) ─────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: mmtto-nginx
+    restart: unless-stopped
+    ports:
+      - "5771:80"
+    volumes:
+      - ./frontend/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend-server
+      - mongo-express
+    networks:
+      - mmtto-net
+
+volumes:
+  mongo_data:
+
+networks:
+  mmtto-net:
+    driver: bridge

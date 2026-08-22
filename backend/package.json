@@ -1,0 +1,15 @@
+{
+  "name": "mantenimiento-backend",
+  "version": "1.0.0",
+  "description": "Parse Server backend para Sistema de Gestión de Mantenimiento",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "mongodb": "^6.9.0",
+    "nodemailer": "^6.9.14",
+    "parse-server": "^7.3.0"
+  }
+}

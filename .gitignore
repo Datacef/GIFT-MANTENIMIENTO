@@ -1,0 +1,22 @@
+# Claude Code / claude-flow
+.claude/
+.claude-flow/
+
+# Environment
+#.env
+#.env.local
+.swarm/
+ 
+# Dependencies
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# SQL dumps
+scripts/data/localhost.sql
