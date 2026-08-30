@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-api
+  namespace: mmtto
+  labels:
+    app: llm-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-api
+  template:
+    metadata:
+      labels:
+        app: llm-api
+    spec:
+      containers:
+        - name: llm-api
+          image: mmtto/llm-api:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: mmtto-env
+          env:
+            - name: OLLAMA_URL
+              value: http://ollama:11434
+          readinessProbe:
+            httpGet:
+              path: /salud
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-api
+  namespace: mmtto
+  labels:
+    app: llm-api
+spec:
+  selector:
+    app: llm-api
+  ports:
+    - port: 8000
+      targetPort: 8000

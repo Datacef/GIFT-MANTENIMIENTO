@@ -12,8 +12,10 @@ import {
   MdSchedule,
   MdAdd,
   MdHistory,
+  MdVerified,
 } from 'react-icons/md';
 import CumplimientoKPICards from 'components/admin/mantenimiento/CumplimientoKPICards';
+import KpiAcreditacionCards, { KpisAcreditacion } from 'components/admin/mantenimiento/KpiAcreditacionCards';
 import CumplimientoPorDominioChart from 'components/admin/mantenimiento/CumplimientoPorDominioChart';
 import CumplimientoTopCriticos, { ActivoCriticoRow } from 'components/admin/mantenimiento/CumplimientoTopCriticos';
 import {
@@ -72,6 +74,24 @@ interface RegularizacionRow {
   primerPeriodoFaltanteIndice: number;
 }
 
+interface CriticoIncumplidoRow {
+  id: string;
+  nombre: string;
+  identificador: string;
+  servicio: string;
+  ubicacion: string;
+  estado: string;
+  cumplimientoPorcentaje: number;
+  proximaFechaMantenimientoEsperada: string;
+}
+
+interface KpisResponse {
+  periodo: { anio: number; mes: number };
+  generadoEl: string;
+  kpis: KpisAcreditacion;
+  criticosIncumplidos: CriticoIncumplidoRow[];
+}
+
 const CumplimientoPage = () => {
   const router = useRouter();
   const [authorized, setAuthorized] = useState(false);
@@ -98,10 +118,12 @@ const CumplimientoPage = () => {
   const [topCriticos, setTopCriticos] = useState<ActivoCriticoRow[]>([]);
   const [proximos, setProximos] = useState<ProximoRow[]>([]);
   const [regularizaciones, setRegularizaciones] = useState<RegularizacionRow[]>([]);
+  const [kpis, setKpis] = useState<KpisResponse | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [loadingCriticos, setLoadingCriticos] = useState(false);
   const [loadingProximos, setLoadingProximos] = useState(false);
   const [loadingRegular, setLoadingRegular] = useState(false);
+  const [loadingKpis, setLoadingKpis] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   const [dominioFilter, setDominioFilter] = useState('');
@@ -114,18 +136,21 @@ const CumplimientoPage = () => {
     setLoadingCriticos(true);
     setLoadingProximos(true);
     setLoadingRegular(true);
+    setLoadingKpis(true);
     try {
       const dominioParam = dominioFilter || undefined;
-      const [s, c, p, r] = await Promise.all([
+      const [s, c, p, r, k] = await Promise.all([
         Parse.Cloud.run('getEstadisticasCumplimiento', dominioParam ? { dominio: dominioParam } : {}),
         Parse.Cloud.run('getTopActivosCriticos', { limit: 20, ...(dominioParam ? { dominio: dominioParam } : {}) }),
         Parse.Cloud.run('getProximosMantenimientos', { dias: diasProximos, ...(dominioParam ? { dominio: dominioParam } : {}) }),
         Parse.Cloud.run('getRegularizacionesPendientes', { limit: 50, mesesMinRetraso, ...(dominioParam ? { dominio: dominioParam } : {}) }),
+        Parse.Cloud.run('getKpisAcreditacion', {}),
       ]);
       setStats(s as EstadisticasResponse);
       setTopCriticos((c as any).results || []);
       setProximos((p as any).results || []);
       setRegularizaciones((r as any).results || []);
+      setKpis(k as KpisResponse);
     } catch (e: any) {
       Swal.fire('Error', e?.message || 'Error al cargar el dashboard', 'error');
     } finally {
@@ -133,6 +158,7 @@ const CumplimientoPage = () => {
       setLoadingCriticos(false);
       setLoadingProximos(false);
       setLoadingRegular(false);
+      setLoadingKpis(false);
     }
   }, [authorized, dominioFilter, diasProximos, mesesMinRetraso]);
 
@@ -269,6 +295,48 @@ const CumplimientoPage = () => {
     }
   };
 
+  // MEJ-01 — Exportacion de evidencia de acreditacion (KPIs + criticos incumplidos)
+  const handleExportarEvidencia = async () => {
+    if (!kpis) return;
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
+
+      const k = kpis.kpis;
+      const kpiData = [
+        { KPI: 'K1 Cumplimiento global', Valor: `${k.k1_cumplimiento_global.porcentaje ?? 0}%`, Detalle: `${k.k1_cumplimiento_global.totalActivos ?? 0} activos` },
+        { KPI: 'K2 EQ-2 Equipos criticos al dia', Valor: `${k.k2_criticos_eq2.porcentaje ?? 0}%`, Umbral: k.k2_criticos_eq2.umbral, Estado: k.k2_criticos_eq2.estado, Detalle: `${k.k2_criticos_eq2.cumplen ?? 0}/${k.k2_criticos_eq2.total ?? 0}` },
+        { KPI: 'K3 EQ-2 Equipos de apoyo al dia', Valor: `${k.k3_apoyo_eq2.porcentaje ?? 0}%`, Umbral: k.k3_apoyo_eq2.umbral, Estado: k.k3_apoyo_eq2.estado, Detalle: `${k.k3_apoyo_eq2.cumplen ?? 0}/${k.k3_apoyo_eq2.total ?? 0}` },
+        { KPI: 'K4 INS-3 Infraestructura al dia', Valor: `${k.k4_infraestructura_ins3.porcentaje ?? 0}%`, Estado: k.k4_infraestructura_ins3.estado, Detalle: `${k.k4_infraestructura_ins3.cumplen ?? 0}/${k.k4_infraestructura_ins3.total ?? 0}` },
+        { KPI: 'K5 Industrial al dia', Valor: `${k.k5_industrial.porcentaje ?? 0}%`, Detalle: `Crit. Alta: ${k.k5_industrial.criticos_alta?.al_dia ?? 0}/${k.k5_industrial.criticos_alta?.total ?? 0}` },
+        { KPI: 'K6 Mantenimientos vencidos', Valor: k.k6_vencidos.cantidad ?? 0 },
+        { KPI: 'K7 Proximos 30 dias', Valor: k.k7_proximos_30d.cantidad ?? 0 },
+        { KPI: 'K8 Sin datos', Valor: k.k8_sin_datos.cantidad ?? 0 },
+        { KPI: 'K9 Licitaciones', Valor: `${k.k9_licitaciones.vigentes ?? 0} vigentes`, Detalle: `${k.k9_licitaciones.porVencer60Dias ?? 0} por vencer (60d) / ${k.k9_licitaciones.vencidas ?? 0} vencidas` },
+      ];
+      const wsKpi = XLSX.utils.json_to_sheet(kpiData);
+      XLSX.utils.book_append_sheet(wb, wsKpi, 'KPIs Acreditacion');
+
+      const incData = (kpis.criticosIncumplidos || []).map((r) => ({
+        Activo: r.nombre,
+        Identificador: r.identificador,
+        Servicio: r.servicio,
+        Ubicacion: r.ubicacion,
+        Estado: ESTADO_CUMPLIMIENTO_LABELS[r.estado] || r.estado,
+        'Cumplimiento (%)': r.cumplimientoPorcentaje,
+        'Proximo Mantto': formatFechaCumplimiento(r.proximaFechaMantenimientoEsperada),
+      }));
+      const wsInc = XLSX.utils.json_to_sheet(incData);
+      XLSX.utils.book_append_sheet(wb, wsInc, 'Criticos Incumplidos');
+
+      const d = new Date();
+      const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      XLSX.writeFile(wb, `evidencia_acreditacion_${stamp}.xlsx`);
+    } catch (e: any) {
+      Swal.fire('Error', e?.message || 'Error al exportar evidencia', 'error');
+    }
+  };
+
   // Construir URL al wizard con retroactivo + periodoIndice + fechaSugerida del primer faltante
   const irRetroactivo = (r: RegularizacionRow) => {
     const params = new URLSearchParams({
@@ -332,6 +400,15 @@ const CumplimientoPage = () => {
           >
             <MdDownload className="h-4 w-4" />
             Descargar Reporte
+          </button>
+          <button
+            onClick={handleExportarEvidencia}
+            disabled={!kpis}
+            className="flex items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-50 dark:border-brand-700 dark:bg-brand-900/30 dark:text-brand-300"
+            title="Exporta los KPIs de acreditacion y el detalle de equipos criticos incumplidos"
+          >
+            <MdVerified className="h-4 w-4" />
+            Exportar evidencia
           </button>
           {userAccessLevel >= 4 && (
             <button
@@ -403,6 +480,9 @@ const CumplimientoPage = () => {
           totalSinHistorial={totalSinHistorial}
         />
       )}
+
+      {/* MEJ-01 — Indicadores de acreditacion (EQ/INS) */}
+      <KpiAcreditacionCards kpis={kpis?.kpis || null} loading={loadingKpis} />
 
       {/* Grafico por dominio */}
       {stats && <CumplimientoPorDominioChart porDominio={stats.porDominio} />}

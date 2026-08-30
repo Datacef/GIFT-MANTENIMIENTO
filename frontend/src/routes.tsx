@@ -18,6 +18,10 @@ import {
   MdEngineering,
   MdOutlineMarkEmailRead,
   MdAssessment,
+  MdPrint,
+  MdNotificationsActive,
+  MdHelpOutline,
+  MdHealthAndSafety,
 } from 'react-icons/md';
 import { UserRole } from 'types/user.types';
 
@@ -28,6 +32,12 @@ const routes = [
     layout: '/admin',
     path: 'default',
     icon: <MdHome className="h-6 w-6" />,
+  },
+  {
+    name: 'Ayuda y Manual',
+    layout: '/admin',
+    path: 'ayuda',
+    icon: <MdHelpOutline className="h-6 w-6" />,
   },
   {
     name: 'Inventarios',
@@ -108,7 +118,21 @@ const routes = [
         icon: <MdAssessment className="h-4 w-4" />,
         allowedRoles: [UserRole.OPERATOR, UserRole.COORDINATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN],
       },
-    ],
+      {
+        name: 'Reporte Semanal',
+        layout: '/admin',
+        path: 'mantenimiento/reporte',
+        icon: <MdPrint className="h-4 w-4" />,
+        allowedRoles: [UserRole.OPERATOR, UserRole.COORDINATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN],
+      },
+      {
+        name: 'Alertas Vencimientos',
+        layout: '/admin',
+        path: 'alertas',
+        icon: <MdNotificationsActive className="h-4 w-4" />,
+        allowedRoles: [UserRole.COORDINATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN],
+      },
+    ]
   },
   {
     name: 'Solicitudes',
@@ -137,6 +161,13 @@ const routes = [
 
 // Rutas del menú de configuración (abajo del sidebar, solo ADMIN+)
 export const configRoutes = [
+  {
+    name: 'Estado Sistema',
+    layout: '/admin',
+    path: 'salud',
+    icon: <MdHealthAndSafety className="h-4 w-4" />,
+    allowedRoles: [UserRole.ADMIN, UserRole.SUPER_ADMIN],
+  },
   {
     name: 'Preguntas Mantenimiento',
     layout: '/admin',

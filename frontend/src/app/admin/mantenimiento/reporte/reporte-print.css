@@ -1,0 +1,80 @@
+/*
+ * MEJ-02 — Estilos de impresion del reporte de mantenimientos.
+ * Tecnica: se oculta todo el documento y solo se muestra el area imprimible
+ * (#area-imprimible), de modo que el sidebar y la navegacion no salgan en papel.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #area-imprimible,
+  #area-imprimible * {
+    visibility: visible;
+  }
+
+  #area-imprimible {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    color: #000 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+
+  /* El bloque de controles (filtros/botones) nunca se imprime */
+  .no-print {
+    display: none !important;
+  }
+
+  #area-imprimible .print-card {
+    border: 1px solid #000 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 8px !important;
+    margin-bottom: 10px !important;
+    break-inside: avoid;
+  }
+
+  #area-imprimible table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  #area-imprimible th,
+  #area-imprimible td {
+    border: 1px solid #444 !important;
+    padding: 4px 6px;
+    color: #000 !important;
+    background: #fff !important;
+  }
+
+  #area-imprimible tr {
+    break-inside: avoid;
+  }
+
+  .print-header {
+    text-align: center;
+    border-bottom: 2px solid #000;
+    padding-bottom: 6px;
+    margin-bottom: 10px;
+  }
+
+  .linea-firma {
+    display: inline-block;
+    border-top: 1px solid #000;
+    min-width: 160px;
+    margin-top: 18px;
+    font-size: 10px;
+    text-align: center;
+  }
+}

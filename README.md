@@ -159,6 +159,7 @@ Para un despliegue desde cero, use la <strong>opción 1 (rebuild completo)</stro
     <tr><td align="center"><strong>12</strong></td><td>💥 <strong>Reset total</strong> — <strong>borra el volumen de MongoDB y toda la data</strong> (pide confirmación escrita)</td></tr>
     <tr><td align="center"><strong>13</strong></td><td>🧹 Limpieza de Docker (prune de imágenes, contenedores, volúmenes y caché)</td></tr>
     <tr><td align="center"><strong>14</strong></td><td>🏥 Cargar establecimientos desde Excel (<code>scripts/load_data_ss.py</code>)</td></tr>
+    <tr><td align="center"><strong>15</strong></td><td>🚀 <strong>Instalación completa</strong> — detecta GPU/CPU y elige el modelo del LLM, genera/rota credenciales fuertes, crea certificados TLS (HTTPS :5772) y levanta todo el stack en un paso</td></tr>
   </tbody>
 </table>
 

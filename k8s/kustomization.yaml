@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mmtto
+
+resources:
+  - namespace.yaml
+  - mongodb-statefulset.yaml
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+  - ollama-deployment.yaml
+  - llm-api-deployment.yaml
+  - nginx-deployment.yaml
+
+configMapGenerator:
+  - name: nginx-conf
+    files:
+      - default.conf=nginx.conf
+
+images:
+  - name: mmtto/backend
+    newTag: local
+  - name: mmtto/frontend
+    newTag: local
+  - name: mmtto/ollama
+    newTag: local
+  - name: mmtto/llm-api
+    newTag: local

@@ -81,6 +81,40 @@ services:
     expose:
       - "8081"
 
+  # ─── Ollama (LLM local para el asistente de ayuda) ─────────
+  ollama:
+    build:
+      context: ./backend/llm
+    container_name: mmtto-ollama
+    restart: unless-stopped
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:0.5b}
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - mmtto-net
+    expose:
+      - "11434"
+
+  # ─── API segura del LLM (proxy con token + HMAC + AES-GCM) ─
+  llm-api:
+    build:
+      context: ./backend/llm-api
+    container_name: mmtto-llm-api
+    restart: unless-stopped
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - LLM_MODEL=${OLLAMA_MODEL:-qwen2.5:0.5b}
+      - LLM_API_TOKEN=${LLM_API_TOKEN}
+      - LLM_API_SECRET=${LLM_API_SECRET}
+    depends_on:
+      - ollama
+    networks:
+      - mmtto-net
+    expose:
+      - "8000"
+
   # ─── Nginx (reverse proxy) ─────────────────────────────────
   nginx:
     image: nginx:alpine
@@ -99,6 +133,7 @@ services:
 
 volumes:
   mongo_data:
+  ollama_data:
 
 networks:
   mmtto-net:

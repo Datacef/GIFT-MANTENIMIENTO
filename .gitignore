@@ -21,3 +21,7 @@ Thumbs.db
 
 # SQL dumps
 scripts/data/localhost.sql
+
+# Generados por el Coordinador (opcion 15)
+certs/
+docker-compose.override.yml

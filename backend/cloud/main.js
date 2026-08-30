@@ -8557,16 +8557,23 @@ Parse.Cloud.define('getProximosMantenimientos', async (request) => {
   const accessLevel = currentUser.get('accessLevel') || 1;
   if (accessLevel < 1) throw new Parse.Error(403, 'Se requiere autenticacion');
 
-  const { dominio = null, dias = 30, limit = 100 } = request.params || {};
+  const { dominio = null, dias = 30, limit = 100, desde = null, hasta = null } = request.params || {};
   const clases = dominio
     ? [cumplimientoMtto.CLASE_POR_DOMINIO[dominio]].filter(Boolean)
     : cumplimientoMtto.CLASES_INVENTARIO.slice();
 
+  // MEJ-02 — ventana explicita desde/hasta (YYYY-MM-DD); si no viene completa, ventana de `dias` desde hoy
   const hoy = new Date();
-  const desde = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate()));
-  const hasta = new Date(desde.getTime() + parseInt(dias, 10) * 24 * 60 * 60 * 1000);
-  const desdeStr = cumplimientoMtto.formatFecha(desde);
-  const hastaStr = cumplimientoMtto.formatFecha(hasta);
+  const desdeFecha = cumplimientoMtto.parseFecha(desde);
+  const hastaFecha = cumplimientoMtto.parseFecha(hasta);
+  const desdeDate = desdeFecha && hastaFecha
+    ? desdeFecha
+    : new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate()));
+  const hastaDate = desdeFecha && hastaFecha
+    ? hastaFecha
+    : new Date(desdeDate.getTime() + parseInt(dias, 10) * 24 * 60 * 60 * 1000);
+  const desdeStr = cumplimientoMtto.formatFecha(desdeDate);
+  const hastaStr = cumplimientoMtto.formatFecha(hastaDate);
 
   const acumulado = [];
   for (const clase of clases) {
@@ -8600,7 +8607,7 @@ Parse.Cloud.define('getProximosMantenimientos', async (request) => {
     return 0;
   });
 
-  return { results: acumulado.slice(0, limit), total: acumulado.length, ventanaDias: parseInt(dias, 10) };
+  return { results: acumulado.slice(0, limit), total: acumulado.length, ventanaDias: parseInt(dias, 10), desde: desdeStr, hasta: hastaStr };
 });
 
 /**
@@ -10324,3 +10331,467 @@ cumplimientoMtto.CLASES_INVENTARIO.forEach(_registrarTriggerInventario);
 
 console.log('✅ Cloud code cargado correctamente — Sistema de Mantenimiento');
 console.log('✅ Motor de cumplimiento de mantenimientos (Etapa 1) registrado');
+
+// =====================================================================
+// MEJ-01 — KPIs de acreditacion (EQ/INS)
+// Referencia: vault GIFT-MANTENIMIENTO-DATACEF/05-MEJORAS/02-kpi-indicadores-mantenimiento.md
+// =====================================================================
+
+const UMBRALES_ACREDITACION = {
+  CRITICOS: 100, // EQ-2: equipos criticos 100% al dia
+  APOYO: 50,     // EQ-2: equipos de apoyo >= 50% al dia
+};
+
+function _estadoVsUmbral(porcentaje, umbral, minimo) {
+  return porcentaje >= umbral ? 'cumple' : porcentaje >= minimo ? 'riesgo' : 'no_cumple';
+}
+
+function _pct(numerador, total) {
+  if (!total) return 0;
+  return Math.round((numerador / total) * 1000) / 10;
+}
+
+/**
+ * getKpisAcreditacion — VIEWER (1)
+ * Calcula K1-K9 sobre los campos denormalizados de cumplimiento y las licitaciones activas.
+ * Params: { anio?, mes? } (informativos; el calculo es estado actual).
+ */
+Parse.Cloud.define('getKpisAcreditacion', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) throw new Parse.Error(403, 'Se requiere autenticacion');
+  const accessLevel = currentUser.get('accessLevel') || 1;
+  if (accessLevel < 1) throw new Parse.Error(403, 'Se requiere autenticacion');
+
+  const hoy = new Date();
+  const hoyUTC = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate()));
+  const hoyStr = cumplimientoMtto.formatFecha(hoyUTC);
+  const en30Str = cumplimientoMtto.formatFecha(new Date(hoyUTC.getTime() + 30 * 24 * 60 * 60 * 1000));
+
+  const CAMPOS = ['nombreEquipo', 'nombreVehiculo', 'componente', 'inventario', 'patente', 'codigoInterno', 'servicio', 'ubicacion', 'asignadoA', 'estadoCumplimientoMantenimiento', 'cumplimientoPorcentaje', 'periodosEsperados', 'proximaFechaMantenimientoEsperada', 'criticoApoyo', 'criticidad'];
+
+  // Lectura en memoria de los 4 inventarios (limit 5000 por clase)
+  const activosPorClase = {};
+  for (const clase of cumplimientoMtto.CLASES_INVENTARIO) {
+    const q = new Parse.Query(clase);
+    q.equalTo('activo', true);
+    q.limit(5000);
+    q.select(...CAMPOS);
+    activosPorClase[clase] = await q.find({ useMasterKey: true });
+  }
+
+  const conteoEstados = (items) => {
+    const c = { sin_configuracion: 0, sin_historial: 0, al_dia: 0, con_retraso: 0, critico: 0, dado_de_baja: 0, total: items.length };
+    for (const it of items) {
+      const e = it.get('estadoCumplimientoMantenimiento');
+      if (e in c) c[e]++;
+    }
+    return c;
+  };
+  const pctPromedio = (items) => {
+    let suma = 0, n = 0;
+    for (const it of items) {
+      const p = it.get('cumplimientoPorcentaje');
+      if (typeof p === 'number' && (it.get('periodosEsperados') || 0) > 0) { suma += p; n++; }
+    }
+    return n ? Math.round((suma / n) * 10) / 10 : 0;
+  };
+  const vencidosDe = (items) => items.filter((it) => {
+    const f = it.get('proximaFechaMantenimientoEsperada');
+    const e = it.get('estadoCumplimientoMantenimiento');
+    return f && f < hoyStr && e !== 'dado_de_baja';
+  });
+  const proximos30De = (items) => items.filter((it) => {
+    const f = it.get('proximaFechaMantenimientoEsperada');
+    const e = it.get('estadoCumplimientoMantenimiento');
+    return f && f >= hoyStr && f <= en30Str && e !== 'dado_de_baja';
+  });
+
+  const medicos = activosPorClase.InventarioEquipoMedico || [];
+  const industriales = activosPorClase.InventarioEquipoIndustrial || [];
+  const infra = activosPorClase.InventarioInfraestructura || [];
+  const flota = activosPorClase.InventarioFlotaVehicular || [];
+  const todos = [...medicos, ...industriales, ...infra, ...flota];
+
+  const medicosCriticos = medicos.filter((it) => it.get('criticoApoyo') === 'C');
+  const medicosApoyo = medicos.filter((it) => it.get('criticoApoyo') === 'A');
+  const industrialesCriticos = industriales.filter((it) => it.get('criticidad') === 'Alta');
+
+  const pctCriticosMedicos = _pct(conteoEstados(medicosCriticos).al_dia, medicosCriticos.length);
+  const pctApoyoMedicos = _pct(conteoEstados(medicosApoyo).al_dia, medicosApoyo.length);
+
+  // K9 — licitaciones activas
+  const qL = new Parse.Query('Licitacion');
+  qL.equalTo('activo', true);
+  qL.limit(1000);
+  const licitaciones = await qL.find({ useMasterKey: true });
+  let licVigentes = 0, licVencidas = 0, licPorVencer60 = 0;
+  for (const l of licitaciones) {
+    // Reusa el calculo oficial (hoisted en este modulo)
+    const { estado, fechaTerminoEfectiva } = calcularEstadoLicitacion(l.get('fechaTermino'), l.get('extensiones') || []);
+    if (estado === 'vencida') licVencidas++;
+    else {
+      licVigentes++;
+      const f = cumplimientoMtto.parseFecha(fechaTerminoEfectiva);
+      if (f && f.getTime() - hoyUTC.getTime() <= 60 * 24 * 60 * 60 * 1000) licPorVencer60++;
+    }
+  }
+
+  const todosEstados = conteoEstados(todos);
+  const kpis = {
+    k1_cumplimiento_global: { porcentaje: pctPromedio(todos), totalActivos: todos.length },
+    k2_criticos_eq2: {
+      porcentaje: pctCriticosMedicos,
+      cumplen: conteoEstados(medicosCriticos).al_dia,
+      total: medicosCriticos.length,
+      umbral: UMBRALES_ACREDITACION.CRITICOS,
+      estado: _estadoVsUmbral(pctCriticosMedicos, UMBRALES_ACREDITACION.CRITICOS, UMBRALES_ACREDITACION.CRITICOS),
+      referencia: 'EQ-2: equipos criticos (criticoApoyo=C) 100% al dia',
+    },
+    k3_apoyo_eq2: {
+      porcentaje: pctApoyoMedicos,
+      cumplen: conteoEstados(medicosApoyo).al_dia,
+      total: medicosApoyo.length,
+      umbral: UMBRALES_ACREDITACION.APOYO,
+      estado: _estadoVsUmbral(pctApoyoMedicos, 80, UMBRALES_ACREDITACION.APOYO),
+      referencia: 'EQ-2: equipos de apoyo (criticoApoyo=A) >= 50% al dia',
+    },
+    k4_infraestructura_ins3: {
+      porcentaje: _pct(conteoEstados(infra).al_dia, infra.length),
+      cumplen: conteoEstados(infra).al_dia,
+      total: infra.length,
+      umbral: 100,
+      estado: _estadoVsUmbral(_pct(conteoEstados(infra).al_dia, infra.length), 90, 50),
+      referencia: 'INS-3: programa de mantenimiento de instalaciones',
+    },
+    k5_industrial: {
+      porcentaje: _pct(conteoEstados(industriales).al_dia, industriales.length),
+      cumplen: conteoEstados(industriales).al_dia,
+      total: industriales.length,
+      criticos_alta: { total: industrialesCriticos.length, al_dia: conteoEstados(industrialesCriticos).al_dia },
+      referencia: 'Equipamiento industrial al dia (con desglose criticidad Alta)',
+    },
+    k6_vencidos: { cantidad: vencidosDe(todos).length },
+    k7_proximos_30d: { cantidad: proximos30De(todos).length },
+    k8_sin_datos: { cantidad: todosEstados.sin_configuracion + todosEstados.sin_historial },
+    k9_licitaciones: { vigentes: licVigentes, vencidas: licVencidas, porVencer60Dias: licPorVencer60 },
+  };
+
+  // Detalle de criticos medicos incumplidos (para evidencia exportable)
+  const criticosIncumplidos = medicosCriticos
+    .filter((it) => it.get('estadoCumplimientoMantenimiento') !== 'al_dia')
+    .slice(0, 50)
+    .map((it) => ({
+      id: it.id,
+      nombre: it.get('nombreEquipo') || '',
+      identificador: it.get('inventario') || '',
+      servicio: it.get('servicio') || '',
+      ubicacion: it.get('ubicacion') || '',
+      estado: it.get('estadoCumplimientoMantenimiento') || '',
+      cumplimientoPorcentaje: it.get('cumplimientoPorcentaje') || 0,
+      proximaFechaMantenimientoEsperada: it.get('proximaFechaMantenimientoEsperada') || '',
+    }));
+
+  return {
+    periodo: { anio: hoyUTC.getUTCFullYear(), mes: hoyUTC.getUTCMonth() + 1 },
+    generadoEl: new Date().toISOString(),
+    porDominio: {
+      equipoMedico: conteoEstados(medicos),
+      equipoIndustrial: conteoEstados(industriales),
+      infraestructura: conteoEstados(infra),
+      flotaVehicular: conteoEstados(flota),
+    },
+    kpis,
+    criticosIncumplidos,
+  };
+});
+
+// =====================================================================
+// MEJ-03 — Alertas de vencimiento (mantenimientos + licitaciones)
+// Referencia: vault GIFT-MANTENIMIENTO-DATACEF/05-MEJORAS/04-alertas-vencimientos.md
+// =====================================================================
+
+const alertasMtto = require('./utils/alertasVencimientos');
+
+/**
+ * getAlertasVencimientos — COORDINATOR (3)
+ * Deteccion on-demand de vencimientos para el panel de alertas.
+ */
+Parse.Cloud.define('getAlertasVencimientos', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) throw new Parse.Error(403, 'Se requiere autenticacion');
+  const accessLevel = currentUser.get('accessLevel') || 1;
+  if (accessLevel < 3) throw new Parse.Error(403, 'Se requieren permisos de coordinador o superior');
+
+  return await alertasMtto.detectarAlertas(Parse, request.params || {});
+});
+
+/**
+ * ejecutarAlertasManualmente — ADMIN (4)
+ * modo 'prueba' (default): lista lo que se enviaria, sin enviar.
+ * modo 'enviar': envia el digest respetando idempotencia diaria.
+ */
+Parse.Cloud.define('ejecutarAlertasManualmente', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) throw new Parse.Error(403, 'Se requiere autenticacion');
+  const accessLevel = currentUser.get('accessLevel') || 1;
+  if (accessLevel < 4) throw new Parse.Error(403, 'Se requieren permisos de administrador o superior');
+
+  return await alertasMtto.ejecutarAlertas(Parse, request.params || {});
+});
+
+/**
+ * Scheduler diario de alertas — sin dependencias externas (no requiere node-cron).
+ * Se activa con ALERTAS_CRON_ENABLED=true y ejecuta a la hora ALERTAS_CRON_HORA
+ * (default 8) de America/Santiago. Chequea cada 30 minutos; la idempotencia de
+ * envio la garantiza alertasVencimientos.ejecutarAlertas (clave por fecha).
+ */
+(function iniciarSchedulerAlertas() {
+  if (process.env.ALERTAS_CRON_ENABLED !== 'true') {
+    console.log('[Alertas] Scheduler desactivado (ALERTAS_CRON_ENABLED != true)');
+    return;
+  }
+  const horaObjetivo = parseInt(process.env.ALERTAS_CRON_HORA || '8', 10);
+  let ultimoDiaEjecutado = '';
+
+  const partesSantiago = () => {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Santiago',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', hour12: false,
+    });
+    const partes = {};
+    for (const p of fmt.formatToParts(new Date())) partes[p.type] = p.value;
+    return partes;
+  };
+
+  const chequear = async () => {
+    try {
+      const p = partesSantiago();
+      const horaActual = parseInt(p.hour === '24' ? '0' : p.hour, 10);
+      const diaActual = `${p.year}-${p.month}-${p.day}`;
+      if (horaActual === horaObjetivo && ultimoDiaEjecutado !== diaActual) {
+        ultimoDiaEjecutado = diaActual;
+        console.log(`[Alertas] Ejecutando job diario de vencimientos (${diaActual} ${horaActual}:00 CL)`);
+        const r = await alertasMtto.ejecutarAlertas(Parse, { modo: 'enviar' });
+        console.log(`[Alertas] Resultado: enviados=${r.enviados} omitidos=${r.omitidos} total=${r.total}`);
+      }
+    } catch (e) {
+      console.error('[Alertas] Error en job diario:', e && e.message);
+    }
+  };
+
+  setInterval(chequear, 30 * 60 * 1000);
+  setTimeout(chequear, 15000); // primer chequeo tras el arranque
+  console.log(`[Alertas] Scheduler activo — diario a las ${horaObjetivo}:00 (America/Santiago)`);
+})();
+
+// =====================================================================
+// Modulo Ayuda — asistente IA del manual de usuario (via ollamaLocal)
+// Referencia: vault GIFT-MANTENIMIENTO-DATACEF/03-ACTUALIZACIONES/07-act-modulo-ayuda-asistente.md
+// =====================================================================
+
+const asistenteIA = require('../services/asistente-ia');
+
+/**
+ * consultarAsistenteIA — VIEWER (1)
+ * Proxy seguro hacia el servidor de IA local. El frontend selecciona con su
+ * buscador las secciones relevantes del manual ({titulo, contenido}) y las
+ * envia como contexto; el token/secreto del servidor IA nunca salen del backend.
+ */
+Parse.Cloud.define('consultarAsistenteIA', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) throw new Parse.Error(403, 'Se requiere autenticacion');
+  const accessLevel = currentUser.get('accessLevel') || 1;
+  if (accessLevel < 1) throw new Parse.Error(403, 'Se requiere autenticacion');
+
+  const { pregunta, contexto = [] } = request.params || {};
+  if (!pregunta || String(pregunta).trim().length < 3) {
+    throw new Parse.Error(400, 'Se requiere una pregunta (minimo 3 caracteres)');
+  }
+  if (!Array.isArray(contexto) || contexto.length > 6) {
+    throw new Parse.Error(400, 'El contexto debe ser un arreglo de hasta 6 secciones');
+  }
+  const contextoLimpio = contexto.slice(0, 6).map((c) => ({
+    titulo: String((c && c.titulo) || '').slice(0, 200),
+    contenido: String((c && c.contenido) || '').slice(0, 8000),
+  }));
+
+  try {
+    return await asistenteIA.consultar({ pregunta: String(pregunta).slice(0, 1000), contexto: contextoLimpio });
+  } catch (e) {
+    console.error('[AsistenteIA] Error consultando al servidor de IA:', e && e.message);
+    return { disponible: false, motivo: 'El servidor de IA no esta disponible en este momento.' };
+  }
+});
+
+/**
+ * getEstadoAsistenteIA — ADMIN (4)
+ * Diagnostico de la configuracion del asistente (sin exponer token ni secreto).
+ */
+Parse.Cloud.define('getEstadoAsistenteIA', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) throw new Parse.Error(403, 'Se requiere autenticacion');
+  const accessLevel = currentUser.get('accessLevel') || 1;
+  if (accessLevel < 4) throw new Parse.Error(403, 'Se requieren permisos de administrador o superior');
+
+  const e = asistenteIA.estado();
+  if (e.enabled && e.urlDefinida) {
+    try {
+      e.saludServidor = await asistenteIA.verificarSalud();
+    } catch (err) {
+      e.saludServidor = { ok: false, error: err && err.message };
+    }
+  }
+  return e;
+});
+
+// =====================================================================
+// Modulo Salud — chequeo completo del estado de la plataforma (ADMIN)
+// Referencia: vault GIFT-MANTENIMIENTO-DATACEF/03-ACTUALIZACIONES/08-act-modulo-salud-sistema.md
+// =====================================================================
+
+const PLATAFORMA_VERSION = '1.1.0';
+
+function _check(id, nombre, estado, detalle, datos) {
+  return { id, nombre, estado, detalle, datos: datos || null }; // estado: ok | advertencia | fallo
+}
+
+/**
+ * getEstadoPlataforma — ADMIN (4)
+ * Chequeo de salud de todos los componentes: base de datos, inventarios,
+ * motor de cumplimiento, correo Brevo, scheduler de alertas, asistente IA,
+ * notificaciones y proceso Node. Cada check devuelve ok | advertencia | fallo.
+ */
+Parse.Cloud.define('getEstadoPlataforma', async (request) => {
+  const currentUser = request.user;
+  if (!currentUser) throw new Parse.Error(403, 'Se requiere autenticacion');
+  const accessLevel = currentUser.get('accessLevel') || 1;
+  if (accessLevel < 4) throw new Parse.Error(403, 'Se requieren permisos de administrador o superior');
+
+  const checks = [];
+
+  // 1) Base de datos — latencia de una consulta real
+  const t0 = Date.now();
+  try {
+    await new Parse.Query('_User').count({ useMasterKey: true });
+    const ms = Date.now() - t0;
+    checks.push(_check('base_datos', 'Base de datos (MongoDB)', ms < 2000 ? 'ok' : 'advertencia',
+      ms < 2000 ? `Conexión OK (${ms} ms)` : `Responde lento (${ms} ms)`));
+  } catch (e) {
+    checks.push(_check('base_datos', 'Base de datos (MongoDB)', 'fallo', `Sin conexión: ${e.message}`));
+  }
+
+  // 2) Los 4 inventarios accesibles y con datos
+  const conteos = {};
+  let inventariosFallo = false;
+  for (const clase of cumplimientoMtto.CLASES_INVENTARIO) {
+    try {
+      const q = new Parse.Query(clase);
+      q.equalTo('activo', true);
+      conteos[clase] = await q.count({ useMasterKey: true });
+    } catch (e) {
+      inventariosFallo = true;
+      conteos[clase] = `ERROR: ${e.message}`;
+    }
+  }
+  const totalActivos = Object.values(conteos).reduce((a, b) => (typeof b === 'number' ? a + b : a), 0);
+  if (inventariosFallo) {
+    checks.push(_check('inventarios', 'Inventarios (4 dominios)', 'fallo', 'Error consultando los inventarios', conteos));
+  } else if (totalActivos === 0) {
+    checks.push(_check('inventarios', 'Inventarios (4 dominios)', 'advertencia', 'Accesibles pero sin activos registrados (base vacía)', conteos));
+  } else {
+    checks.push(_check('inventarios', 'Inventarios (4 dominios)', 'ok', `${totalActivos} activos en total`, conteos));
+  }
+
+  // 3) Motor de cumplimiento — campos denormalizados presentes
+  try {
+    const q = new Parse.Query('InventarioEquipoMedico');
+    q.equalTo('activo', true);
+    q.exists('estadoCumplimientoMantenimiento');
+    const conCumplimiento = await q.count({ useMasterKey: true });
+    if (conCumplimiento > 0) {
+      checks.push(_check('cumplimiento', 'Motor de cumplimiento', 'ok', `${conCumplimiento} activos con cumplimiento calculado`));
+    } else {
+      checks.push(_check('cumplimiento', 'Motor de cumplimiento', 'advertencia', 'Sin cálculos aún: ejecuta "Sincronizar todos" en Cumplimiento'));
+    }
+  } catch (e) {
+    checks.push(_check('cumplimiento', 'Motor de cumplimiento', 'fallo', e.message));
+  }
+
+  // 4) Correo (Brevo SMTP)
+  try {
+    const cfg = estadoConfig();
+    if (cfg.userDefinido && cfg.passDefinida) {
+      checks.push(_check('correo', 'Correo (Brevo SMTP)', 'ok', 'Credenciales configuradas', cfg));
+    } else {
+      checks.push(_check('correo', 'Correo (Brevo SMTP)', 'advertencia', 'Credenciales incompletas: solicitudes y alertas no podrán enviar correos', cfg));
+    }
+  } catch (e) {
+    checks.push(_check('correo', 'Correo (Brevo SMTP)', 'fallo', e.message));
+  }
+
+  // 5) Notificaciones recientes — fallos en las últimas 24 h
+  try {
+    const q = new Parse.Query('NotificacionCorreo');
+    q.equalTo('estado', 'fallido');
+    q.greaterThan('createdAt', new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const fallidos = await q.count({ useMasterKey: true });
+    if (fallidos === 0) {
+      checks.push(_check('notificaciones', 'Notificaciones (últimas 24 h)', 'ok', 'Sin envíos fallidos'));
+    } else {
+      checks.push(_check('notificaciones', 'Notificaciones (últimas 24 h)', 'advertencia', `${fallidos} correo(s) fallido(s) en las últimas 24 h — revisa /admin/diagnostico-correo`));
+    }
+  } catch (e) {
+    checks.push(_check('notificaciones', 'Notificaciones (últimas 24 h)', 'advertencia', `No se pudo consultar el log: ${e.message}`));
+  }
+
+  // 6) Scheduler de alertas
+  const cronActivo = process.env.ALERTAS_CRON_ENABLED === 'true';
+  checks.push(_check('alertas_scheduler', 'Scheduler de alertas', cronActivo ? 'ok' : 'advertencia',
+    cronActivo
+      ? `Activo — diario a las ${process.env.ALERTAS_CRON_HORA || '8'}:00 (America/Santiago)`
+      : 'Desactivado (ALERTAS_CRON_ENABLED != true) — las alertas solo se consultan manualmente'));
+
+  // 7) Asistente IA (ollamaLocal)
+  if (asistenteIA.disponible()) {
+    try {
+      const salud = await asistenteIA.verificarSalud();
+      checks.push(_check('asistente_ia', 'Asistente IA (ollamaLocal)', salud.ok ? 'ok' : 'advertencia',
+        salud.ok ? `Servidor OK — modelos: ${(salud.modelos_disponibles || []).join(', ') || '(ninguno)'}` : 'Servidor respondió sin modelos',
+        salud));
+    } catch (e) {
+      checks.push(_check('asistente_ia', 'Asistente IA (ollamaLocal)', 'fallo', `Configurado pero inaccesible: ${e.message}`));
+    }
+  } else {
+    checks.push(_check('asistente_ia', 'Asistente IA (ollamaLocal)', 'advertencia', 'No configurado (ASISTENTE_IA_ENABLED != true) — el manual y su buscador funcionan igual'));
+  }
+
+  // 8) Establecimientos cargados
+  try {
+    const est = await new Parse.Query('Establecimiento').count({ useMasterKey: true });
+    checks.push(_check('establecimientos', 'Establecimientos', est > 0 ? 'ok' : 'advertencia',
+      est > 0 ? `${est} cargados` : 'Ninguno cargado (opción 14 del Coordinador)'));
+  } catch (e) {
+    checks.push(_check('establecimientos', 'Establecimientos', 'advertencia', `No se pudo consultar: ${e.message}`));
+  }
+
+  const memoria = process.memoryUsage();
+  const resumen = {
+    ok: checks.filter((c) => c.estado === 'ok').length,
+    advertencias: checks.filter((c) => c.estado === 'advertencia').length,
+    fallos: checks.filter((c) => c.estado === 'fallo').length,
+  };
+
+  return {
+    version: PLATAFORMA_VERSION,
+    generadoEl: new Date().toISOString(),
+    resumen,
+    checks,
+    info: {
+      node: process.version,
+      uptimeSegundos: Math.round(process.uptime()),
+      memoriaMB: Math.round(memoria.rss / 1024 / 1024),
+      entorno: process.env.NODE_ENV || 'desarrollo',
+    },
+  };
+});
